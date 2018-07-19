@@ -17,7 +17,8 @@ if __name__ == "__main__":
     # update continue.sh before updating NEOS
     if os.path.isfile(os.path.join(BASEDIR, "scripts", "continue.sh")):
       from shutil import copyfile
-      copyfile(os.path.join(BASEDIR, "scripts", "continue.sh"), "/data/data/com.termux/files/continue.sh")
+      copyfile(os.path.join(BASEDIR, "scripts", "continue.sh"),
+               "/data/data/com.termux/files/continue.sh")
 
     # run the updater
     print("Starting NEOS updater")
@@ -27,11 +28,13 @@ if __name__ == "__main__":
 
   # get a non-blocking stdout
   child_pid, child_pty = os.forkpty()
-  if child_pid != 0: # parent
+  if child_pid != 0:  # parent
 
     # child is in its own process group, manually pass kill signals
-    signal.signal(signal.SIGINT, lambda signum, frame: os.kill(child_pid, signal.SIGINT))
-    signal.signal(signal.SIGTERM, lambda signum, frame: os.kill(child_pid, signal.SIGTERM))
+    signal.signal(signal.SIGINT, lambda signum,
+                  frame: os.kill(child_pid, signal.SIGINT))
+    signal.signal(signal.SIGTERM, lambda signum,
+                  frame: os.kill(child_pid, signal.SIGTERM))
 
     fcntl.fcntl(sys.stdout, fcntl.F_SETFL,
        fcntl.fcntl(sys.stdout, fcntl.F_GETFL) | os.O_NONBLOCK)
@@ -63,7 +66,7 @@ import traceback
 from multiprocessing import Process
 
 import zmq
-from setproctitle import setproctitle  #pylint: disable=no-name-in-module
+from setproctitle import setproctitle  # pylint: disable=no-name-in-module
 
 from common.params import Params
 import cereal
@@ -101,8 +104,11 @@ managed_processes = {
 android_packages = ("ai.comma.plus.offroad", "ai.comma.plus.frame")
 
 running = {}
+
+
 def get_running():
   return running
+
 
 # due to qualcomm kernel bugs SIGKILLing visiond sometimes causes page table corruption
 unkillable_processes = ['visiond']
@@ -132,6 +138,7 @@ car_started_processes = [
   'orbd',
 ]
 
+
 def register_managed_process(name, desc, car_started=False):
   global managed_processes, car_started_processes, persistent_processes
   print("registering %s" % name)
@@ -142,6 +149,8 @@ def register_managed_process(name, desc, car_started=False):
     persistent_processes.append(name)
 
 # ****************** process management functions ******************
+
+
 def launcher(proc, gctx):
   try:
     # import the process
@@ -160,6 +169,7 @@ def launcher(proc, gctx):
     crash.capture_exception()
     raise
 
+
 def nativelauncher(pargs, cwd):
   # exec the process
   os.chdir(cwd)
@@ -168,6 +178,7 @@ def nativelauncher(pargs, cwd):
   os.chmod(pargs[0], 0o700)
 
   os.execvp(pargs[0], pargs)
+
 
 def start_managed_process(name):
   if name in running or name not in managed_processes:
@@ -180,8 +191,10 @@ def start_managed_process(name):
     pdir, pargs = proc
     cwd = os.path.join(BASEDIR, pdir)
     # cloudlog.info("starting process %s" % name)
-    running[name] = Process(name=name, target=nativelauncher, args=(pargs, cwd))
+    running[name] = Process(
+        name=name, target=nativelauncher, args=(pargs, cwd))
   running[name].start()
+
 
 def prepare_managed_process(p):
   proc = managed_processes[p]
@@ -193,12 +206,16 @@ def prepare_managed_process(p):
     # build this process
     # cloudlog.info("building %s" % (proc,))
     try:
-      subprocess.check_call(["make", "-j4"], cwd=os.path.join(BASEDIR, proc[0]))
+      subprocess.check_call(
+          ["make", "-j4"], cwd=os.path.join(BASEDIR, proc[0]))
     except subprocess.CalledProcessError:
       # make clean if the build failed
       # cloudlog.warning("building %s failed, make clean" % (proc, ))
-      subprocess.check_call(["make", "clean"], cwd=os.path.join(BASEDIR, proc[0]))
-      subprocess.check_call(["make", "-j4"], cwd=os.path.join(BASEDIR, proc[0]))
+      subprocess.check_call(
+          ["make", "clean"], cwd=os.path.join(BASEDIR, proc[0]))
+      subprocess.check_call(
+          ["make", "-j4"], cwd=os.path.join(BASEDIR, proc[0]))
+
 
 def kill_managed_process(name):
   if name not in running or name not in managed_processes:
@@ -230,9 +247,11 @@ def kill_managed_process(name):
   # cloudlog.info("%s is dead with %d" % (name, running[name].exitcode))
   del running[name]
 
+
 def pm_apply_packages(cmd):
   for p in android_packages:
     system("pm %s %s" % (cmd, p))
+
 
 def cleanup_all_processes(signal, frame):
   # cloudlog.info("caught ctrl-c %s %s" % (signal, frame))
@@ -279,21 +298,22 @@ def manager_init(should_register=True):
   # set gctx
   gctx = {}
 
+
 def system(cmd):
   try:
     # cloudlog.info("running %s" % cmd)
     subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
   except subprocess.CalledProcessError as e:
     # cloudlog.event("running failed",
-      cmd=e.cmd,
-      output=e.output[-1024:],
-      returncode=e.returncode)
+      cmd = e.cmd,
+      output = e.output[-1024:],
+      returncode = e.returncode)
 
 
 def manager_thread():
   # now loop
-  context = zmq.Context()
-  thermal_sock = messaging.sub_sock(context, service_list['thermal'].port)
+  context=zmq.Context()
+  thermal_sock=messaging.sub_sock(context, service_list['thermal'].port)
 
   # cloudlog.info("manager start")
   # cloudlog.info({"environ": os.environ})
@@ -308,12 +328,12 @@ def manager_thread():
   if os.getenv("NOBOARD") is None:
     start_managed_process("pandad")
 
-  params = Params()
-  logger_dead = False
+  params=Params()
+  logger_dead=False
 
   while 1:
     # get health of board, log this in "thermal"
-    msg = messaging.recv_sock(thermal_sock, wait=True)
+    msg=messaging.recv_sock(thermal_sock, wait = True)
 
     # uploader is gated based on the phone temperature
     if msg.thermal.thermalStatus >= ThermalStatus.yellow:
@@ -322,7 +342,7 @@ def manager_thread():
       start_managed_process("uploader")
 
     if msg.thermal.freeSpace < 0.05:
-      logger_dead = True
+      logger_dead=True
 
     if msg.thermal.started:
       for p in car_started_processes:
@@ -331,7 +351,7 @@ def manager_thread():
         else:
           start_managed_process(p)
     else:
-      logger_dead = False
+      logger_dead=False
       for p in car_started_processes:
         kill_managed_process(p)
 
@@ -344,55 +364,56 @@ def manager_thread():
       break
 
 def get_installed_apks():
-  dat = subprocess.check_output(["pm", "list", "packages", "-f"]).strip().split("\n")
-  ret = {}
+  dat=subprocess.check_output(
+      ["pm", "list", "packages", "-f"]).strip().split("\n")
+  ret={}
   for x in dat:
     if x.startswith("package:"):
-      v,k = x.split("package:")[1].split("=")
-      ret[k] = v
+      v, k=x.split("package:")[1].split("=")
+      ret[k]=v
   return ret
 
 def install_apk(path):
   # can only install from world readable path
-  install_path = "/sdcard/%s" % os.path.basename(path)
+  install_path="/sdcard/%s" % os.path.basename(path)
   shutil.copyfile(path, install_path)
 
-  ret = subprocess.call(["pm", "install", "-r", install_path])
+  ret=subprocess.call(["pm", "install", "-r", install_path])
   os.remove(install_path)
   return ret == 0
 
 def update_apks():
   # install apks
-  installed = get_installed_apks()
+  installed=get_installed_apks()
 
-  install_apks = glob.glob(os.path.join(BASEDIR, "apk/*.apk"))
+  install_apks=glob.glob(os.path.join(BASEDIR, "apk/*.apk"))
   for apk in install_apks:
-    app = os.path.basename(apk)[:-4]
+    app=os.path.basename(apk)[:-4]
     if app not in installed:
-      installed[app] = None
+      installed[app]=None
 
   # cloudlog.info("installed apks %s" % (str(installed), ))
 
   for app in installed.iterkeys():
 
-    apk_path = os.path.join(BASEDIR, "apk/"+app+".apk")
+    apk_path=os.path.join(BASEDIR, "apk/"+app+".apk")
     if not os.path.exists(apk_path):
       continue
 
-    h1 = open(apk_path).read()
-    h2 = None
+    h1=open(apk_path).read()
+    h2=None
     if installed[app] is not None:
-      h2 = hashlib.sha1(open(installed[app]).read()).hexdigest()
-      #cloudlog.info("comparing version of %s  %s vs %s" % (app, h1, h2))
+      h2=hashlib.sha1(open(installed[app]).read()).hexdigest()
+      # cloudlog.info("comparing version of %s  %s vs %s" % (app, h1, h2))
 
     if h2 is None or h1 != h2:
-      #cloudlog.info("installing %s" % app)
+      # cloudlog.info("installing %s" % app)
 
-      success = install_apk(apk_path)
+      success=install_apk(apk_path)
       if not success:
-        #cloudlog.info("needing to uninstall %s" % app)
+        # cloudlog.info("needing to uninstall %s" % app)
         system("pm uninstall %s" % app)
-        success = install_apk(apk_path)
+        success=install_apk(apk_path)
 
       assert success
 
@@ -404,7 +425,7 @@ def manager_update():
 
 def manager_prepare():
   # build cereal first
-  subprocess.check_call(["make", "-j4"], cwd=os.path.join(BASEDIR, "cereal"))
+  subprocess.check_call(["make", "-j4"], cwd = os.path.join(BASEDIR, "cereal"))
 
   # build all processes
   os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -440,7 +461,7 @@ def main():
     del managed_processes['controlsd']
     del managed_processes['radard']
   if os.getenv("DEFAULTD") is not None:
-    managed_processes["controlsd"] = "selfdrive.controls.defaultd"
+    managed_processes["controlsd"]="selfdrive.controls.defaultd"
 
   # support additional internal only extensions
   try:
@@ -449,7 +470,7 @@ def main():
   except ImportError:
     pass
 
-  params = Params()
+  params=Params()
   params.manager_start()
 
   # set unset params
@@ -477,12 +498,12 @@ def main():
 
   # put something on screen while we set things up
   if os.getenv("PREPAREONLY") is not None:
-    spinner_proc = None
+    spinner_proc=None
   else:
-    spinner_text = "chffrplus" if params.get("Passive")=="1" else "openpilot"
-    spinner_proc = subprocess.Popen(["./spinner", "loading %s"%spinner_text],
-      cwd=os.path.join(BASEDIR, "selfdrive", "ui", "spinner"),
-      close_fds=True)
+    spinner_text="chffrplus" if params.get("Passive") == "1" else "openpilot"
+    spinner_proc=subprocess.Popen(["./spinner", "loading %s" % spinner_text],
+      cwd = os.path.join(BASEDIR, "selfdrive", "ui", "spinner"),
+      close_fds = True)
   try:
     manager_update()
     manager_init()
@@ -512,4 +533,3 @@ if __name__ == "__main__":
   main()
   # manual exit because we are forked
   sys.exit(0)
-
