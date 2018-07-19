@@ -304,7 +304,8 @@ def system(cmd):
     print("running %s" % cmd)
     subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
   except subprocess.CalledProcessError as e:
-    print("running failed", cmd = e.cmd, output = e.output[-1024:], returncode = e.returncode)
+    print("running failed")
+
 def manager_thread():
   # now loop
   context=zmq.Context()
