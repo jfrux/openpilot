@@ -162,7 +162,7 @@ def launcher(proc, gctx):
     # exec the process
     mod.main(gctx)
   except KeyboardInterrupt:
-    # cloudlog.warning("child %s got SIGINT" % proc)
+    print("child %s got SIGINT" % proc)
   except Exception:
     # can't install the crash handler becuase sys.excepthook doesn't play nice
     # with threads, so catch it here.
@@ -185,12 +185,12 @@ def start_managed_process(name):
     return
   proc = managed_processes[name]
   if isinstance(proc, str):
-    # cloudlog.info("starting python %s" % proc)
+    print("starting python %s" % proc)
     running[name] = Process(name=name, target=launcher, args=(proc, gctx))
   else:
     pdir, pargs = proc
     cwd = os.path.join(BASEDIR, pdir)
-    # cloudlog.info("starting process %s" % name)
+    print("starting process %s" % name)
     running[name] = Process(
         name=name, target=nativelauncher, args=(pargs, cwd))
   running[name].start()
@@ -200,17 +200,17 @@ def prepare_managed_process(p):
   proc = managed_processes[p]
   if isinstance(proc, str):
     # import this python
-    # cloudlog.info("preimporting %s" % proc)
+    print("preimporting %s" % proc)
     importlib.import_module(proc)
   else:
     # build this process
-    # cloudlog.info("building %s" % (proc,))
+    print("building %s" % (proc,))
     try:
       subprocess.check_call(
           ["make", "-j4"], cwd=os.path.join(BASEDIR, proc[0]))
     except subprocess.CalledProcessError:
       # make clean if the build failed
-      # cloudlog.warning("building %s failed, make clean" % (proc, ))
+      print("building %s failed, make clean" % (proc, ))
       subprocess.check_call(
           ["make", "clean"], cwd=os.path.join(BASEDIR, proc[0]))
       subprocess.check_call(
@@ -220,7 +220,7 @@ def prepare_managed_process(p):
 def kill_managed_process(name):
   if name not in running or name not in managed_processes:
     return
-  # cloudlog.info("killing %s" % name)
+  print("killing %s" % name)
 
   if running[name].exitcode is None:
     if name in interrupt_processes:
@@ -240,11 +240,11 @@ def kill_managed_process(name):
           os.system("reboot")
           raise RuntimeError
       else:
-        # cloudlog.info("killing %s with SIGKILL" % name)
+        print("killing %s with SIGKILL" % name)
         os.kill(running[name].pid, signal.SIGKILL)
         running[name].join()
 
-  # cloudlog.info("%s is dead with %d" % (name, running[name].exitcode))
+  print("%s is dead with %d" % (name, running[name].exitcode))
   del running[name]
 
 
@@ -254,13 +254,13 @@ def pm_apply_packages(cmd):
 
 
 def cleanup_all_processes(signal, frame):
-  # cloudlog.info("caught ctrl-c %s %s" % (signal, frame))
+  print("caught ctrl-c %s %s" % (signal, frame))
 
   pm_apply_packages('disable')
 
   for name in list(running.keys()):
     kill_managed_process(name)
-  # cloudlog.info("everything is dead")
+  print("everything is dead")
 
 
 # ****************** run loop ******************
@@ -278,10 +278,10 @@ def manager_init(should_register=True):
     dongle_id = "c"*16
 
   # set dongle id
-  # cloudlog.info("dongle id is " + dongle_id)
+  print("dongle id is " + dongle_id)
   os.environ['DONGLE_ID'] = dongle_id
 
-  # cloudlog.info("dirty is %d" % dirty)
+  print("dirty is %d" % dirty)
   if not dirty:
     os.environ['CLEAN'] = '1'
 
@@ -301,7 +301,7 @@ def manager_init(should_register=True):
 
 def system(cmd):
   try:
-    # cloudlog.info("running %s" % cmd)
+    print("running %s" % cmd)
     subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
   except subprocess.CalledProcessError as e:
     # cloudlog.event("running failed",
@@ -315,8 +315,8 @@ def manager_thread():
   context=zmq.Context()
   thermal_sock=messaging.sub_sock(context, service_list['thermal'].port)
 
-  # cloudlog.info("manager start")
-  # cloudlog.info({"environ": os.environ})
+  print("manager start")
+  print({"environ": os.environ})
 
   for p in persistent_processes:
     start_managed_process(p)
@@ -392,7 +392,7 @@ def update_apks():
     if app not in installed:
       installed[app]=None
 
-  # cloudlog.info("installed apks %s" % (str(installed), ))
+  print("installed apks %s" % (str(installed), ))
 
   for app in installed.iterkeys():
 
@@ -404,14 +404,14 @@ def update_apks():
     h2=None
     if installed[app] is not None:
       h2=hashlib.sha1(open(installed[app]).read()).hexdigest()
-      # cloudlog.info("comparing version of %s  %s vs %s" % (app, h1, h2))
+      print("comparing version of %s  %s vs %s" % (app, h1, h2))
 
     if h2 is None or h1 != h2:
-      # cloudlog.info("installing %s" % app)
+      print("installing %s" % app)
 
       success=install_apk(apk_path)
       if not success:
-        # cloudlog.info("needing to uninstall %s" % app)
+        print("needing to uninstall %s" % app)
         system("pm uninstall %s" % app)
         success=install_apk(apk_path)
 
@@ -419,7 +419,7 @@ def update_apks():
 
 def manager_update():
   if os.path.exists(os.path.join(BASEDIR, "vpn")):
-    # cloudlog.info("installing vpn")
+    print("installing vpn")
     os.system(os.path.join(BASEDIR, "vpn", "install.sh"))
   update_apks()
 
@@ -433,7 +433,7 @@ def manager_prepare():
     prepare_managed_process(p)
 
 def uninstall():
-  # cloudlog.warning("uninstalling")
+  print("uninstalling")
   with open('/cache/recovery/command', 'w') as f:
     f.write('--wipe_data\n')
   # IPowerManager.reboot(confirm=false, reason="recovery", wait=true)
