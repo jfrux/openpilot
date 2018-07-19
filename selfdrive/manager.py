@@ -304,12 +304,7 @@ def system(cmd):
     print("running %s" % cmd)
     subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
   except subprocess.CalledProcessError as e:
-    # cloudlog.event("running failed",
-      cmd = e.cmd,
-      output = e.output[-1024:],
-      returncode = e.returncode)
-
-
+    print("running failed", cmd = e.cmd, output = e.output[-1024:], returncode = e.returncode)
 def manager_thread():
   # now loop
   context=zmq.Context()
@@ -357,7 +352,7 @@ def manager_thread():
 
     # check the status of all processes, did any of them die?
     for p in running:
-      # cloudlog.debug("   running %s %s" % (p, running[p]))
+      print("   running %s %s" % (p, running[p]))
 
     # is this still needed?
     if params.get("DoUninstall") == "1":
