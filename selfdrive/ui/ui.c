@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <time.h>
+#include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -47,6 +49,7 @@
 #define ALERTSIZE_FULL 3
 
 #define UI_BUF_COUNT 4
+// using namespace std;
 
 const int vwp_w = 1920;
 const int vwp_h = 1080;
@@ -59,6 +62,7 @@ const int box_y = bdr_s;
 const int box_w = vwp_w-sbr_w-(bdr_s*2);
 const int box_h = vwp_h-(bdr_s*2);
 const int viz_w = vwp_w-(bdr_s*2);
+const int debug_drawer_w = 180;
 const int header_h = 420;
 const int footer_h = 280;
 const int footer_y = vwp_h-bdr_s-footer_h;
@@ -93,6 +97,7 @@ const mat3 intrinsic_matrix = (mat3){{
   0.,   0.,   1.
 }};
 
+
 typedef struct UIScene {
   int frontview;
   int fullview;
@@ -114,7 +119,10 @@ typedef struct UIScene {
   float v_ego;
   float curvature;
   int engaged;
+  uint64_t engaged_ts;
+  int engaged_seconds;
   bool engageable;
+  bool show_debug_drawer;
   bool monitoring_active;
 
   bool uilayout_sidebarcollapsed;
@@ -125,7 +133,9 @@ typedef struct UIScene {
   int ui_viz_ro;
 
   int lead_status;
+  int lead_two_status;
   float lead_d_rel, lead_y_rel, lead_v_rel;
+  float lead_two_d_rel, lead_two_y_rel, lead_two_v_rel;
 
   int front_box_x, front_box_y, front_box_width, front_box_height;
 
@@ -820,6 +830,26 @@ static void ui_draw_vision_lanes(UIState *s) {
   }
 }
 
+static void draw_lead(UIState *s, float lead_status, float lead_d, float lead_v, float lead_y) {
+  const UIScene *scene = &s->scene;
+
+  if (lead_status) {
+    // Draw lead car indicator
+    float fillAlpha = 0;
+    float speedBuff = 10.;
+    float leadBuff = 40.;
+    if (lead_d < leadBuff) {
+      fillAlpha = 255*(1.0-(lead_d/leadBuff));
+      if (lead_v < 0) {
+        fillAlpha += 255*(-1*(lead_v/speedBuff));
+      }
+      fillAlpha = (int)(min(fillAlpha, 255));
+    }
+    draw_chevron(s, lead_d+2.7, lead_y, 25,
+                  nvgRGBA(201, 34, 49, fillAlpha), nvgRGBA(218, 202, 37, 255));
+  }
+}
+
 // Draw all world space objects.
 static void ui_draw_world(UIState *s) {
   const UIScene *scene = &s->scene;
@@ -832,21 +862,10 @@ static void ui_draw_world(UIState *s) {
     ui_draw_vision_lanes(s);
   }
 
-  if (scene->lead_status) {
-    // Draw lead car indicator
-    float fillAlpha = 0;
-    float speedBuff = 10.;
-    float leadBuff = 40.;
-    if (scene->lead_d_rel < leadBuff) {
-      fillAlpha = 255*(1.0-(scene->lead_d_rel/leadBuff));
-      if (scene->lead_v_rel < 0) {
-        fillAlpha += 255*(-1*(scene->lead_v_rel/speedBuff));
-      }
-      fillAlpha = (int)(min(fillAlpha, 255));
-    }
-    draw_chevron(s, scene->lead_d_rel+2.7, scene->lead_y_rel, 25,
-                  nvgRGBA(201, 34, 49, fillAlpha), nvgRGBA(218, 202, 37, 255));
-  }
+  // Draw primary lead car indicator
+  draw_lead(s, scene->lead_status, scene->lead_d_rel, scene->lead_v_rel, scene->lead_y_rel );
+  // Draw secondary lead car indicator
+  draw_lead(s, scene->lead_two_status, scene->lead_two_d_rel, scene->lead_two_v_rel, scene->lead_two_y_rel );
 }
 
 static void ui_draw_vision_maxspeed(UIState *s) {
@@ -990,6 +1009,54 @@ static void ui_draw_vision_face(UIState *s) {
   nvgFill(s->vg);
 }
 
+static void ui_draw_vision_engaged_seconds(UIState *s) {
+  const UIScene *scene = &s->scene;
+  int ui_viz_rx = scene->ui_viz_rx;
+  int ui_viz_rw = scene->ui_viz_rw;
+  float engaged_seconds = s->scene.engaged_seconds;
+
+  const int viz_engaged_seconds_w = 280;
+  const int viz_engaged_seconds_x = ui_viz_rx+((ui_viz_rw/2)-(viz_engaged_seconds_w/2));
+  char engaged_seconds_str[32];
+
+  nvgBeginPath(s->vg);
+  nvgRect(s->vg, viz_engaged_seconds_x, box_y, viz_engaged_seconds_w, header_h);
+  nvgTextAlign(s->vg, NVG_ALIGN_CENTER | NVG_ALIGN_BASELINE);
+
+  snprintf(engaged_seconds_str, sizeof(engaged_seconds_str), "%d", (int)(engaged_seconds * 3.6 + 0.5));
+  
+  // "seconds"
+  nvgFontFace(s->vg, "sans-regular");
+  nvgFontSize(s->vg, 36*2.5);
+  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
+  nvgText(s->vg, viz_engaged_seconds_x+viz_engaged_seconds_w/2, 320, "engaged for", NULL);
+
+  // number of seconds
+  nvgFontFace(s->vg, "sans-bold");
+  nvgFontSize(s->vg, 96*2.5);
+  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 255));
+  nvgText(s->vg, viz_engaged_seconds_x+viz_engaged_seconds_w/2, 240, engaged_seconds_str, NULL);
+  
+  // "seconds"
+  nvgFontFace(s->vg, "sans-regular");
+  nvgFontSize(s->vg, 36*2.5);
+  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
+  nvgText(s->vg, viz_engaged_seconds_x+viz_engaged_seconds_w/2, 320, "seconds", NULL);
+}
+
+// Right side drawer will house the debug data
+static void ui_draw_vision_debug_drawer(UIState *s) {
+  const UIScene *scene = &s->scene;
+  
+  nvgBeginPath(s->vg);
+  nvgRoundedRect(s->vg, 1550, box_y+250, 300, 700, 20);
+  nvgStrokeColor(s->vg, nvgRGBA(255,255,255,80));
+  nvgStrokeWidth(s->vg, 6);
+  nvgStroke(s->vg);
+
+  ui_draw_vision_engaged_seconds(s);
+}
+
 static void ui_draw_vision_header(UIState *s) {
   const UIScene *scene = &s->scene;
   int ui_viz_rx = scene->ui_viz_rx;
@@ -1120,7 +1187,8 @@ static void ui_draw_vision(UIState *s) {
   } else {
     ui_draw_vision_footer(s);
   }
-
+  
+  ui_draw_vision_debug_drawer(s);
 
   nvgEndFrame(s->vg);
   glDisable(GL_BLEND);
@@ -1410,6 +1478,9 @@ static void ui_update(UIState *s) {
         // printf("recv %f\n", datad.vEgo);
 
         s->scene.frontview = datad.rearViewCam;
+        if (datad.enabled) {
+        } else {
+        }
         if (datad.alertText1.str) {
           snprintf(s->scene.alert_text1, sizeof(s->scene.alert_text1), "%s", datad.alertText1.str);
         } else {
@@ -1467,11 +1538,17 @@ static void ui_update(UIState *s) {
         struct cereal_Live20Data datad;
         cereal_read_Live20Data(&datad, eventd.live20);
         struct cereal_Live20Data_LeadData leaddatad;
+        struct cereal_Live20Data_LeadData leadtwodatad;
         cereal_read_Live20Data_LeadData(&leaddatad, datad.leadOne);
+        cereal_read_Live20Data_LeadData(&leadtwodatad, datad.leadTwo);
         s->scene.lead_status = leaddatad.status;
         s->scene.lead_d_rel = leaddatad.dRel;
         s->scene.lead_y_rel = leaddatad.yRel;
         s->scene.lead_v_rel = leaddatad.vRel;
+        s->scene.lead_two_status = leadtwodatad.status;
+        s->scene.lead_two_d_rel = leadtwodatad.dRel;
+        s->scene.lead_two_y_rel = leadtwodatad.yRel;
+        s->scene.lead_two_v_rel = leadtwodatad.vRel;
       } else if (eventd.which == cereal_Event_liveCalibration) {
         s->scene.world_objects_visible = true;
         struct cereal_LiveCalibrationData datad;
@@ -1513,7 +1590,6 @@ static void ui_update(UIState *s) {
       } else if (eventd.which == cereal_Event_thermal) {
         struct cereal_ThermalData datad;
         cereal_read_ThermalData(&datad, eventd.thermal);
-
         if (!datad.started) {
           update_status(s, STATUS_STOPPED);
         } else if (s->status == STATUS_STOPPED) {
@@ -1522,6 +1598,20 @@ static void ui_update(UIState *s) {
         }
 
         s->scene.started_ts = datad.startedTs;
+        if (datad.startedTs > 0) {
+          if (s->scene.engaged_ts > 0) {
+            // Simple calculation of amount of time has passed since engaged.
+            s->scene.engaged_seconds = s->scene.engaged_seconds + (eventd.logMonoTime)-(s->scene.engaged_ts);
+          } else {
+            // Resets the engaged time to current time and resets engaged seconds to 0
+            s->scene.engaged_ts = eventd.logMonoTime;
+            s->scene.engaged_seconds = 0;
+          }
+        } else {
+          // If car is not started, engaged seconds can be reset.
+          s->scene.engaged_seconds = 0;
+        }
+
       } else if (eventd.which == cereal_Event_uiLayoutState) {
           struct cereal_UiLayoutState datad;
           cereal_read_UiLayoutState(&datad, eventd.uiLayoutState);
