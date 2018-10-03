@@ -49,7 +49,6 @@
 #define ALERTSIZE_FULL 3
 
 #define UI_BUF_COUNT 4
-// using namespace std;
 
 const int vwp_w = 1920;
 const int vwp_h = 1080;
@@ -62,7 +61,13 @@ const int box_y = bdr_s;
 const int box_w = vwp_w-sbr_w-(bdr_s*2);
 const int box_h = vwp_h-(bdr_s*2);
 const int viz_w = vwp_w-(bdr_s*2);
-const int debug_drawer_w = 180;
+const int debug_console_padding = 10;
+const int debug_console_w = 300;
+const int debug_console_h = 700;
+const int debug_console_x = box_x+box_w-debug_console_w-bdr_s;
+const int debug_console_x2 = debug_console_x+debug_console_w;
+const int debug_console_y = box_y+box_h-debug_console_h-bdr_s;
+const int debug_console_y2 = debug_console_y+debug_console_w;
 const int header_h = 420;
 const int footer_h = 280;
 const int footer_y = vwp_h-bdr_s-footer_h;
@@ -121,8 +126,9 @@ typedef struct UIScene {
   int engaged;
   uint64_t engaged_ts;
   int engaged_seconds;
+  int engaged_total_seconds;
   bool engageable;
-  bool show_debug_drawer;
+  bool debug_console_active;
   bool monitoring_active;
 
   bool uilayout_sidebarcollapsed;
@@ -189,6 +195,8 @@ typedef struct UIState {
 
   zsock_t *uilayout_sock;
   void *uilayout_sock_raw;
+  zsock_t *can_sock;
+  void *can_sock_raw;
 
   int plus_state;
 
@@ -264,6 +272,23 @@ static void set_awake(UIState *s, bool awake) {
       framebuffer_set_power(s->fb, HWC_POWER_MODE_OFF);
     }
   }
+}
+
+// Debug Console Methods
+static void toggle_debug_console(UIState *s) {
+  s->scene.debug_console_active = !s->scene.debug_console_active;
+
+  if (s->scene.debug_console_active) {
+    printf("Debug console is now shown.\n");
+  } else {
+    printf("Debug console is now hidden.\n");
+  }
+}
+
+// touch.c has x and y coords mixed up for the flippening.
+// so that is why y = x and x = y
+bool is_touch_in_debug_console_bounds(TouchState touch) {
+  return (touch.last_y >= debug_console_x && touch.last_y <= debug_console_x2) && (touch.last_x >= debug_console_y && touch.last_x <= debug_console_y2);
 }
 
 volatile int do_exit = 0;
@@ -355,6 +380,10 @@ static void ui_init(UIState *s) {
   s->uilayout_sock = zsock_new_sub(">tcp://127.0.0.1:8060", "");
   assert(s->uilayout_sock);
   s->uilayout_sock_raw = zsock_resolve(s->uilayout_sock);
+
+  s->can_sock = zsock_new_sub(">tcp://127.0.0.1:8006", "");
+  assert(s->can_sock);
+  s->can_sock_raw = zsock_resolve(s->can_sock);
 
   s->livecalibration_sock = zsock_new_sub(">tcp://127.0.0.1:8019", "");
   assert(s->livecalibration_sock);
@@ -1008,53 +1037,81 @@ static void ui_draw_vision_face(UIState *s) {
   nvgFillPaint(s->vg, face_img);
   nvgFill(s->vg);
 }
+char* seconds_to_time_str(int seconds) {
+  char time_output[11];
+  int time = seconds;
+  int hour = 0;
+  int min = 0;
+  int sec = 0;
 
-static void ui_draw_vision_engaged_seconds(UIState *s) {
-  const UIScene *scene = &s->scene;
-  int ui_viz_rx = scene->ui_viz_rx;
-  int ui_viz_rw = scene->ui_viz_rw;
-  float engaged_seconds = s->scene.engaged_seconds;
-
-  const int viz_engaged_seconds_w = 280;
-  const int viz_engaged_seconds_x = ui_viz_rx+((ui_viz_rw/2)-(viz_engaged_seconds_w/2));
-  char engaged_seconds_str[32];
-
-  nvgBeginPath(s->vg);
-  nvgRect(s->vg, viz_engaged_seconds_x, box_y, viz_engaged_seconds_w, header_h);
-  nvgTextAlign(s->vg, NVG_ALIGN_CENTER | NVG_ALIGN_BASELINE);
-
-  snprintf(engaged_seconds_str, sizeof(engaged_seconds_str), "%d", (int)(engaged_seconds * 3.6 + 0.5));
-  
-  // "seconds"
-  nvgFontFace(s->vg, "sans-regular");
-  nvgFontSize(s->vg, 36*2.5);
-  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
-  nvgText(s->vg, viz_engaged_seconds_x+viz_engaged_seconds_w/2, 320, "engaged for", NULL);
-
-  // number of seconds
-  nvgFontFace(s->vg, "sans-bold");
-  nvgFontSize(s->vg, 96*2.5);
-  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 255));
-  nvgText(s->vg, viz_engaged_seconds_x+viz_engaged_seconds_w/2, 240, engaged_seconds_str, NULL);
-  
-  // "seconds"
-  nvgFontFace(s->vg, "sans-regular");
-  nvgFontSize(s->vg, 36*2.5);
-  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
-  nvgText(s->vg, viz_engaged_seconds_x+viz_engaged_seconds_w/2, 320, "seconds", NULL);
+  hour = time/3600;
+	time = time%3600;
+	min = time/60;
+	time = time%60;
+	sec = time;
+  // time_output = sprintf("seconds: %u", seconds);
+  snprintf ( time_output, 11, "%.2d:%.2d:%.2d", hour, min, sec );
+  return time_output;
 }
 
-// Right side drawer will house the debug data
-static void ui_draw_vision_debug_drawer(UIState *s) {
+static void ui_draw_engaged_timer(UIState *s, char* label, int seconds, int placement) {
+  const UIScene *scene = &s->scene;
+  const int box_separation = debug_console_padding;
+  const int box_height = 150;
+  const int box_width = debug_console_w-(debug_console_padding*2);
+  const int pos_x = debug_console_x+((debug_console_w/2)-(box_width/2));
+  const int pos_y = debug_console_y+(debug_console_padding+(box_height+box_separation)*placement);
+  const int label_text_size = 20*2.5;
+  const int label_x = pos_x+box_width/2;
+  const int label_y = (pos_y+box_height/2)-20;
+
+  const int timer_text_size = 32*2.5;
+  const int timer_x = pos_x+box_width/2;
+  const int timer_y = (pos_y+box_height/2)+50;
+
+  nvgBeginPath(s->vg);
+  nvgRoundedRect(s->vg, pos_x, pos_y, box_width, box_height, 10);
+  nvgStrokeColor(s->vg, nvgRGBA(255,255,255,80));
+  nvgStrokeWidth(s->vg, 1);
+  nvgStroke(s->vg);
+  nvgTextAlign(s->vg, NVG_ALIGN_CENTER | NVG_ALIGN_BASELINE);
+
+  // Label
+  nvgFontFace(s->vg, "sans-regular");
+  nvgFontSize(s->vg, label_text_size);
+  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
+  nvgText(s->vg, label_x, label_y, label, NULL);
+  
+  // Time
+  nvgFontFace(s->vg, "sans-bold");
+  nvgFontSize(s->vg, timer_text_size);
+  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 255));
+  nvgText(s->vg, timer_x, timer_y, seconds_to_time_str(seconds), NULL);
+}
+
+// Draws Seconds Engaged for Debug Console
+static void ui_draw_vision_engaged_timers(UIState *s) {
+  const UIScene *scene = &s->scene;
+  int engaged_seconds = s->scene.engaged_seconds;
+  int engaged_total_seconds = s->scene.engaged_total_seconds;
+
+  ui_draw_engaged_timer(s, "current engage", engaged_seconds, 0);
+  ui_draw_engaged_timer(s, "totals for drive", engaged_total_seconds, 1);
+}
+
+// Draws Debug Console Box
+static void ui_draw_vision_debug_console(UIState *s) {
   const UIScene *scene = &s->scene;
   
-  nvgBeginPath(s->vg);
-  nvgRoundedRect(s->vg, 1550, box_y+250, 300, 700, 20);
-  nvgStrokeColor(s->vg, nvgRGBA(255,255,255,80));
-  nvgStrokeWidth(s->vg, 6);
-  nvgStroke(s->vg);
+  if (s->scene.debug_console_active) {
+    nvgBeginPath(s->vg);
+    nvgRoundedRect(s->vg, debug_console_x, debug_console_y, debug_console_w, debug_console_h, 20);
+    nvgStrokeColor(s->vg, nvgRGBA(255,255,255,150));
+    nvgStrokeWidth(s->vg, 2.5);
+    nvgStroke(s->vg);
 
-  ui_draw_vision_engaged_seconds(s);
+    ui_draw_vision_engaged_timers(s);
+  }
 }
 
 static void ui_draw_vision_header(UIState *s) {
@@ -1188,7 +1245,7 @@ static void ui_draw_vision(UIState *s) {
     ui_draw_vision_footer(s);
   }
   
-  ui_draw_vision_debug_drawer(s);
+  ui_draw_vision_debug_console(s);
 
   nvgEndFrame(s->vg);
   glDisable(GL_BLEND);
@@ -1335,7 +1392,7 @@ static void ui_update(UIState *s) {
 
   // poll for events
   while (true) {
-    zmq_pollitem_t polls[9] = {{0}};
+    zmq_pollitem_t polls[10] = {{0}};
     polls[0].socket = s->live100_sock_raw;
     polls[0].events = ZMQ_POLLIN;
     polls[1].socket = s->livecalibration_sock_raw;
@@ -1350,14 +1407,16 @@ static void ui_update(UIState *s) {
     polls[5].events = ZMQ_POLLIN;
     polls[6].socket = s->uilayout_sock_raw;
     polls[6].events = ZMQ_POLLIN;
-    polls[7].socket = s->plus_sock_raw;
+    polls[7].socket = s->can_sock_raw;
     polls[7].events = ZMQ_POLLIN;
+    polls[8].socket = s->plus_sock_raw;
+    polls[8].events = ZMQ_POLLIN;
 
-    int num_polls = 8;
+    int num_polls = 9;
     if (s->vision_connected) {
       assert(s->ipc_fd >= 0);
-      polls[8].fd = s->ipc_fd;
-      polls[8].events = ZMQ_POLLIN;
+      polls[9].fd = s->ipc_fd;
+      polls[9].events = ZMQ_POLLIN;
       num_polls++;
     }
 
@@ -1371,12 +1430,14 @@ static void ui_update(UIState *s) {
     }
 
     if (polls[0].revents || polls[1].revents || polls[2].revents ||
-        polls[3].revents || polls[4].revents || polls[6].revents || polls[7].revents) {
+        polls[3].revents || polls[4].revents || polls[6].revents || polls[8].revents) {
       // awake on any (old) activity
       set_awake(s, true);
     }
 
-    if (s->vision_connected && polls[8].revents) {
+    uint64_t current_time = time(NULL);
+
+    if (s->vision_connected && polls[9].revents) {
       // vision ipc event
       VisionPacket rp;
       err = vipc_recv(s->ipc_fd, &rp);
@@ -1419,7 +1480,7 @@ static void ui_update(UIState *s) {
       } else {
         assert(false);
       }
-    } else if (polls[7].revents) {
+    } else if (polls[8].revents) {
       // plus socket
 
       zmq_msg_t msg;
@@ -1478,9 +1539,7 @@ static void ui_update(UIState *s) {
         // printf("recv %f\n", datad.vEgo);
 
         s->scene.frontview = datad.rearViewCam;
-        if (datad.enabled) {
-        } else {
-        }
+        
         if (datad.alertText1.str) {
           snprintf(s->scene.alert_text1, sizeof(s->scene.alert_text1), "%s", datad.alertText1.str);
         } else {
@@ -1598,14 +1657,21 @@ static void ui_update(UIState *s) {
         }
 
         s->scene.started_ts = datad.startedTs;
+        
         if (datad.startedTs > 0) {
           if (s->scene.engaged_ts > 0) {
-            // Simple calculation of amount of time has passed since engaged.
-            s->scene.engaged_seconds = s->scene.engaged_seconds + (eventd.logMonoTime)-(s->scene.engaged_ts);
+            // Not sure if this will ever be possible.
+            if (s->scene.started_ts < s->scene.engaged_ts) {
+              s->scene.engaged_ts = 0;
+            }
+            uint64_t engaged_time = s->scene.engaged_ts;
+            uint64_t engaged_time_diff = difftime(current_time,engaged_time);
+            s->scene.engaged_seconds = engaged_time_diff;
           } else {
             // Resets the engaged time to current time and resets engaged seconds to 0
-            s->scene.engaged_ts = eventd.logMonoTime;
+            s->scene.engaged_ts = current_time;
             s->scene.engaged_seconds = 0;
+            s->scene.engaged_total_seconds = s->scene.engaged_total_seconds+s->scene.engaged_seconds;
           }
         } else {
           // If car is not started, engaged seconds can be reset.
@@ -1859,9 +1925,19 @@ int main() {
     // awake on any touch
     int touch_x = -1, touch_y = -1;
     int touched = touch_poll(&touch, &touch_x, &touch_y, s->awake ? 0 : 100);
+    set_awake(s, true);
     if (touched == 1) {
       // touch event will still happen :(
-      set_awake(s, true);
+    }
+    
+    // TODO: If we add more touch regions in the future, it would be best to move
+    // them into a struct and change it to is_touch_in_bounds(touch, region)
+
+    // Toggle Debug Console
+    s->scene.debug_console_active=true;
+
+    if (touched == 1 && s->awake && is_touch_in_debug_console_bounds(touch)) {
+      toggle_debug_console(s);
     }
 
     // manage wakefulness
