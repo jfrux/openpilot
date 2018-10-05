@@ -1809,6 +1809,7 @@ static void ui_update(UIState *s) {
             int existing_engaged_seconds = s->scene.engaged_total_seconds;
             s->scene.engaged_total_seconds = existing_engaged_seconds + new_engaged_seconds;
             s->scene.engaged_seconds = 0;
+            s->scene.engaged_ts = 0;
           } else if (s->scene.engaged && s->scene.engaged_ts > 0) {
             uint64_t engaged_ts = s->scene.engaged_ts;
             int new_engaged_seconds = difftime(current_time,engaged_ts);
@@ -1816,6 +1817,7 @@ static void ui_update(UIState *s) {
           }
         } else {
           // If car is not started, engaged seconds can be reset.
+          s->scene.engaged_ts = 0;
           s->scene.engaged_seconds = 0;
         }
 
