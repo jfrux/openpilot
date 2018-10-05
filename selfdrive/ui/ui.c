@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <time.h>
+#include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -29,10 +31,13 @@
 #include "common/framebuffer.h"
 #include "common/visionipc.h"
 #include "common/visionimg.h"
+#include "common/candata.h"
 #include "common/modeldata.h"
 #include "common/params.h"
 
 #include "cereal/gen/c/log.capnp.h"
+
+#define CAN_BUFFER_SIZE 5
 
 #define STATUS_STOPPED 0
 #define STATUS_DISENGAGED 1
@@ -59,8 +64,16 @@ const int box_y = bdr_s;
 const int box_w = vwp_w-sbr_w-(bdr_s*2);
 const int box_h = vwp_h-(bdr_s*2);
 const int viz_w = vwp_w-(bdr_s*2);
+const int debug_console_padding = 10;
+const int debug_console_w = 300;
+const int debug_console_h = 700;
+const int debug_console_x = box_x+box_w-debug_console_w-bdr_s;
+const int debug_console_x2 = debug_console_x+debug_console_w;
+const int debug_console_y = box_y+box_h-debug_console_h-bdr_s;
+const int debug_console_y2 = debug_console_y+debug_console_w;
 const int header_h = 420;
 const int footer_h = 280;
+const int debug_timers_total_height = 270;
 const int footer_y = vwp_h-bdr_s-footer_h;
 
 const uint8_t bg_colors[][4] = {
@@ -114,7 +127,11 @@ typedef struct UIScene {
   float v_ego;
   float curvature;
   int engaged;
+  uint64_t engaged_ts;
+  int engaged_seconds;
+  int engaged_total_seconds;
   bool engageable;
+  bool debug_console_active;
   bool monitoring_active;
 
   bool uilayout_sidebarcollapsed;
@@ -125,7 +142,9 @@ typedef struct UIScene {
   int ui_viz_ro;
 
   int lead_status;
+  int lead_two_status;
   float lead_d_rel, lead_y_rel, lead_v_rel;
+  float lead_two_d_rel, lead_two_y_rel, lead_two_v_rel;
 
   int front_box_x, front_box_y, front_box_width, front_box_height;
 
@@ -179,9 +198,14 @@ typedef struct UIState {
 
   zsock_t *uilayout_sock;
   void *uilayout_sock_raw;
+  zsock_t *can_sock;
+  void *can_sock_raw;
 
   int plus_state;
 
+  CanMessage can_messages[CAN_BUFFER_SIZE];
+  int can_head_index;
+  
   // vision state
   bool vision_connected;
   bool vision_connect_firstrun;
@@ -237,6 +261,12 @@ static void set_brightness(UIState *s, int brightness) {
   }
 }
 
+static void add_can_message(UIState *s, CanMessage new_message) {
+  CanMessage head = s->can_messages[s->can_head_index];
+  s->can_messages[s->can_head_index] = new_message;
+  s->can_head_index = (s->can_head_index + 1) % CAN_BUFFER_SIZE; 
+}
+
 static void set_awake(UIState *s, bool awake) {
   if (awake) {
     // 30 second timeout at 30 fps
@@ -254,6 +284,23 @@ static void set_awake(UIState *s, bool awake) {
       framebuffer_set_power(s->fb, HWC_POWER_MODE_OFF);
     }
   }
+}
+
+// Debug Console Methods
+static void toggle_debug_console(UIState *s) {
+  s->scene.debug_console_active = !s->scene.debug_console_active;
+
+  if (s->scene.debug_console_active) {
+    printf("Debug console is now shown.\n");
+  } else {
+    printf("Debug console is now hidden.\n");
+  }
+}
+
+// touch.c has x and y coords mixed up for the flippening.
+// so that is why y = x and x = y
+bool is_touch_in_debug_console_bounds(TouchState touch) {
+  return (touch.last_y >= debug_console_x && touch.last_y <= debug_console_x2) && (touch.last_x >= debug_console_y && touch.last_x <= debug_console_y2);
 }
 
 volatile int do_exit = 0;
@@ -345,6 +392,10 @@ static void ui_init(UIState *s) {
   s->uilayout_sock = zsock_new_sub(">tcp://127.0.0.1:8060", "");
   assert(s->uilayout_sock);
   s->uilayout_sock_raw = zsock_resolve(s->uilayout_sock);
+
+  s->can_sock = zsock_new_sub(">tcp://127.0.0.1:8006", "");
+  assert(s->can_sock);
+  s->can_sock_raw = zsock_resolve(s->can_sock);
 
   s->livecalibration_sock = zsock_new_sub(">tcp://127.0.0.1:8019", "");
   assert(s->livecalibration_sock);
@@ -820,6 +871,26 @@ static void ui_draw_vision_lanes(UIState *s) {
   }
 }
 
+static void draw_lead(UIState *s, float lead_status, float lead_d, float lead_v, float lead_y) {
+  const UIScene *scene = &s->scene;
+
+  if (lead_status) {
+    // Draw lead car indicator
+    float fillAlpha = 0;
+    float speedBuff = 10.;
+    float leadBuff = 40.;
+    if (lead_d < leadBuff) {
+      fillAlpha = 255*(1.0-(lead_d/leadBuff));
+      if (lead_v < 0) {
+        fillAlpha += 255*(-1*(lead_v/speedBuff));
+      }
+      fillAlpha = (int)(min(fillAlpha, 255));
+    }
+    draw_chevron(s, lead_d+2.7, lead_y, 25,
+                  nvgRGBA(201, 34, 49, fillAlpha), nvgRGBA(218, 202, 37, 255));
+  }
+}
+
 // Draw all world space objects.
 static void ui_draw_world(UIState *s) {
   const UIScene *scene = &s->scene;
@@ -832,21 +903,10 @@ static void ui_draw_world(UIState *s) {
     ui_draw_vision_lanes(s);
   }
 
-  if (scene->lead_status) {
-    // Draw lead car indicator
-    float fillAlpha = 0;
-    float speedBuff = 10.;
-    float leadBuff = 40.;
-    if (scene->lead_d_rel < leadBuff) {
-      fillAlpha = 255*(1.0-(scene->lead_d_rel/leadBuff));
-      if (scene->lead_v_rel < 0) {
-        fillAlpha += 255*(-1*(scene->lead_v_rel/speedBuff));
-      }
-      fillAlpha = (int)(min(fillAlpha, 255));
-    }
-    draw_chevron(s, scene->lead_d_rel+2.7, scene->lead_y_rel, 25,
-                  nvgRGBA(201, 34, 49, fillAlpha), nvgRGBA(218, 202, 37, 255));
-  }
+  // Draw primary lead car indicator
+  draw_lead(s, scene->lead_status, scene->lead_d_rel, scene->lead_v_rel, scene->lead_y_rel );
+  // Draw secondary lead car indicator
+  draw_lead(s, scene->lead_two_status, scene->lead_two_d_rel, scene->lead_two_v_rel, scene->lead_two_y_rel );
 }
 
 static void ui_draw_vision_maxspeed(UIState *s) {
@@ -990,6 +1050,171 @@ static void ui_draw_vision_face(UIState *s) {
   nvgFill(s->vg);
 }
 
+static void seconds_to_time_str(char *seconds_str, int seconds) {
+  int time = seconds;
+  int hour = 0;
+  int min = 0;
+  int sec = 0;
+
+  hour = time/3600;
+	time = time%3600;
+	min = time/60;
+	time = time%60;
+	sec = time;
+  snprintf(seconds_str, 9, "%.2d:%.2d:%.2d", hour, min, sec );
+}
+
+static void ui_draw_vision_engaged_timer(UIState *s, char* label, int seconds, int placement) {
+  const UIScene *scene = &s->scene;
+  char seconds_str[9];
+  const int box_separation = debug_console_padding;
+  const int box_height = debug_timers_total_height/2;
+  const int box_width = debug_console_w-(debug_console_padding*2);
+  const int pos_x = debug_console_x+((debug_console_w/2)-(box_width/2));
+  const int pos_y = debug_console_y+(debug_console_padding+(box_height+box_separation)*placement);
+  const int label_text_size = 20*2.5;
+  const int label_x = pos_x+box_width/2;
+  const int label_y = (pos_y+box_height/2)-30;
+
+  const int timer_text_size = 32*2.5;
+  const int timer_x = pos_x+box_width/2;
+  const int timer_y = (pos_y+box_height/2)+40;
+  
+  seconds_to_time_str(seconds_str, seconds);
+
+  nvgBeginPath(s->vg);
+  nvgRoundedRect(s->vg, pos_x, pos_y, box_width, box_height, 10);
+  nvgStrokeColor(s->vg, nvgRGBA(255,255,255,80));
+  nvgStrokeWidth(s->vg, 1);
+  nvgStroke(s->vg);
+  nvgTextAlign(s->vg, NVG_ALIGN_CENTER | NVG_ALIGN_BASELINE);
+
+  // Label
+  nvgFontFace(s->vg, "sans-regular");
+  nvgFontSize(s->vg, label_text_size);
+  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
+  nvgText(s->vg, label_x, label_y, label, NULL);
+  
+  // Time
+  nvgFontFace(s->vg, "sans-bold");
+  nvgFontSize(s->vg, timer_text_size);
+  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 255));
+  nvgText(s->vg, timer_x, timer_y, seconds_str, NULL);
+}
+
+// Draws Seconds Engaged for Debug Console
+static void ui_draw_vision_engaged_timers(UIState *s) {
+  const UIScene *scene = &s->scene;
+  int engaged_seconds = s->scene.engaged_seconds;
+  int engaged_total_seconds = s->scene.engaged_total_seconds;
+
+  ui_draw_vision_engaged_timer(s, "current engage", engaged_seconds, 0);
+  ui_draw_vision_engaged_timer(s, "totals for drive", engaged_total_seconds+engaged_seconds, 1);
+}
+
+static void ui_draw_vision_can_message(UIState *s, CanMessage message, int placement) {
+  const UIScene *scene = &s->scene;
+  char address_str[6];
+  sprintf(address_str, "%g", message.address);
+  const int box_separation = debug_console_padding;
+  const int box_height = 60;
+  const int box_width = debug_console_w-(debug_console_padding*2);
+  const int pos_x = debug_console_x+((debug_console_w/2)-(box_width/2));
+  const int pos_y = debug_console_y+75+debug_timers_total_height+(debug_console_padding+(box_height+box_separation)*placement);
+  
+  // CANBUS NUMBER?
+  // const int src_text_size = 20*2.5;
+  // const int src_x = pos_x+box_width/2;
+  // const int src_y = (pos_y+box_height/2)-50;
+  
+  // DATA
+  // const int data_text_size = 20*2.5;
+  // const int data_x = pos_x+box_width/2;
+  // const int data_y = (pos_y+box_height/2)-20;
+
+  const int address_text_size = 22*2.5;
+  const int address_x = pos_x+box_width/2;
+  const int address_y = (pos_y+box_height/2)+15;
+
+  nvgBeginPath(s->vg);
+  nvgRoundedRect(s->vg, pos_x, pos_y, box_width, box_height, 10);
+  nvgStrokeColor(s->vg, nvgRGBA(255,255,255,80));
+  nvgStrokeWidth(s->vg, 1);
+  nvgStroke(s->vg);
+  nvgTextAlign(s->vg, NVG_ALIGN_CENTER | NVG_ALIGN_BASELINE);
+
+  // data
+  // nvgFontFace(s->vg, "sans-regular");
+  // nvgFontSize(s->vg, label_text_size);
+  // nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
+  // nvgText(s->vg, label_x, label_y, label, NULL);
+  
+  // can_message.address
+  nvgFontFace(s->vg, "sans-bold");
+  nvgFontSize(s->vg, address_text_size);
+  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 255));
+  nvgText(s->vg, address_x, address_y, address_str, NULL);
+}
+
+static void ui_draw_vision_can_messages(UIState *s) {
+  const UIScene *scene = &s->scene;
+  int engaged_seconds = s->scene.engaged_seconds;
+  int engaged_total_seconds = s->scene.engaged_total_seconds;
+  const int box_separation = debug_console_padding;
+  const int box_height = 60;
+  const int box_width = debug_console_w-(debug_console_padding*2);
+  const int pos_x = debug_console_x+((debug_console_w/2)-(box_width/2));
+  const int pos_y = debug_console_y+debug_timers_total_height+(debug_console_padding+(box_height+box_separation));
+  const int label_text_size = 20*2.5;
+  const int label_x = pos_x+box_width/2;
+  const int label_y = (pos_y+box_height/2)-40;
+  
+  nvgBeginPath(s->vg);
+  nvgFontFace(s->vg, "sans-regular");
+  nvgFontSize(s->vg, label_text_size);
+  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
+  nvgText(s->vg, label_x, label_y, "last 5 canbus", NULL);
+  
+  for (int i = 0; i < CAN_BUFFER_SIZE; i++) {
+    ui_draw_vision_can_message(s, s->can_messages[i], i);
+  }
+}
+
+// Draws Debug Console Box
+static void ui_draw_vision_debug_console(UIState *s) {
+  const UIScene *scene = &s->scene;
+  int ui_viz_rx = scene->ui_viz_rx;
+  int ui_viz_rw = scene->ui_viz_rw;
+  if (s->scene.debug_console_active) {
+    nvgBeginPath(s->vg);
+    int gradient_sx = debug_console_x;// Starting X
+    int gradient_sy = debug_console_y;// Starting Y
+    int gradient_ex = debug_console_x;// Ending X
+    int gradient_ey = debug_console_y+debug_console_h;// Ending Y
+  
+    NVGpaint debug_gradient = nvgLinearGradient(s->vg, 
+                          gradient_sx,
+                          gradient_sy,
+                          gradient_ex,
+                          gradient_ey,
+                          nvgRGBAf(0,0,0,0),
+                          nvgRGBAf(0,0,0,0.30)
+                        );
+    nvgFillPaint(s->vg, debug_gradient);
+    nvgRect(s->vg, debug_console_x, debug_console_y, debug_console_w, debug_console_h);
+    nvgFill(s->vg);
+    
+    nvgBeginPath(s->vg);
+    nvgRoundedRect(s->vg, debug_console_x, debug_console_y, debug_console_w, debug_console_h, 20);
+    nvgStrokeColor(s->vg, nvgRGBA(255,255,255,150));
+    nvgStrokeWidth(s->vg, 2.5);
+    nvgStroke(s->vg);
+    
+    ui_draw_vision_engaged_timers(s);
+    ui_draw_vision_can_messages(s);
+  }
+}
+
 static void ui_draw_vision_header(UIState *s) {
   const UIScene *scene = &s->scene;
   int ui_viz_rx = scene->ui_viz_rx;
@@ -1120,7 +1345,8 @@ static void ui_draw_vision(UIState *s) {
   } else {
     ui_draw_vision_footer(s);
   }
-
+  
+  ui_draw_vision_debug_console(s);
 
   nvgEndFrame(s->vg);
   glDisable(GL_BLEND);
@@ -1168,6 +1394,20 @@ static PathData read_path(cereal_ModelData_PathData_ptr pathp) {
   }
 
   return ret;
+}
+
+static CanData read_can(cereal_CanData_ptr canp) {
+  struct cereal_CanData cand;
+  cereal_read_CanData(&cand, canp);
+
+  CanData d = {0};
+
+  d.address = cand.address;
+  d.src = cand.src;
+  d.busTime = cand.busTime;
+  // d.data = cand.data;
+
+  return d;
 }
 
 static ModelData read_model(cereal_ModelData_ptr modelp) {
@@ -1267,7 +1507,7 @@ static void ui_update(UIState *s) {
 
   // poll for events
   while (true) {
-    zmq_pollitem_t polls[9] = {{0}};
+    zmq_pollitem_t polls[10] = {{0}};
     polls[0].socket = s->live100_sock_raw;
     polls[0].events = ZMQ_POLLIN;
     polls[1].socket = s->livecalibration_sock_raw;
@@ -1282,14 +1522,16 @@ static void ui_update(UIState *s) {
     polls[5].events = ZMQ_POLLIN;
     polls[6].socket = s->uilayout_sock_raw;
     polls[6].events = ZMQ_POLLIN;
-    polls[7].socket = s->plus_sock_raw;
+    polls[7].socket = s->can_sock_raw;
     polls[7].events = ZMQ_POLLIN;
+    polls[8].socket = s->plus_sock_raw;
+    polls[8].events = ZMQ_POLLIN;
 
-    int num_polls = 8;
+    int num_polls = 9;
     if (s->vision_connected) {
       assert(s->ipc_fd >= 0);
-      polls[8].fd = s->ipc_fd;
-      polls[8].events = ZMQ_POLLIN;
+      polls[9].fd = s->ipc_fd;
+      polls[9].events = ZMQ_POLLIN;
       num_polls++;
     }
 
@@ -1303,12 +1545,14 @@ static void ui_update(UIState *s) {
     }
 
     if (polls[0].revents || polls[1].revents || polls[2].revents ||
-        polls[3].revents || polls[4].revents || polls[6].revents || polls[7].revents) {
+        polls[3].revents || polls[4].revents || polls[6].revents || polls[8].revents) {
       // awake on any (old) activity
       set_awake(s, true);
     }
 
-    if (s->vision_connected && polls[8].revents) {
+    uint64_t current_time = time(NULL);
+
+    if (s->vision_connected && polls[9].revents) {
       // vision ipc event
       VisionPacket rp;
       err = vipc_recv(s->ipc_fd, &rp);
@@ -1346,12 +1590,11 @@ static void ui_update(UIState *s) {
         } else {
           assert(idx < UI_BUF_COUNT);
           s->cur_vision_idx = idx;
-          // printf("v %d\n", ((uint8_t*)s->bufs[idx].addr)[0]);
         }
       } else {
         assert(false);
       }
-    } else if (polls[7].revents) {
+    } else if (polls[8].revents) {
       // plus socket
 
       zmq_msg_t msg;
@@ -1407,9 +1650,9 @@ static void ui_update(UIState *s) {
         s->scene.engageable = datad.engageable;
         s->scene.gps_planner_active = datad.gpsPlannerActive;
         s->scene.monitoring_active = datad.driverMonitoringOn;
-        // printf("recv %f\n", datad.vEgo);
 
         s->scene.frontview = datad.rearViewCam;
+
         if (datad.alertText1.str) {
           snprintf(s->scene.alert_text1, sizeof(s->scene.alert_text1), "%s", datad.alertText1.str);
         } else {
@@ -1467,11 +1710,17 @@ static void ui_update(UIState *s) {
         struct cereal_Live20Data datad;
         cereal_read_Live20Data(&datad, eventd.live20);
         struct cereal_Live20Data_LeadData leaddatad;
+        struct cereal_Live20Data_LeadData leadtwodatad;
         cereal_read_Live20Data_LeadData(&leaddatad, datad.leadOne);
+        cereal_read_Live20Data_LeadData(&leadtwodatad, datad.leadTwo);
         s->scene.lead_status = leaddatad.status;
         s->scene.lead_d_rel = leaddatad.dRel;
         s->scene.lead_y_rel = leaddatad.yRel;
         s->scene.lead_v_rel = leaddatad.vRel;
+        s->scene.lead_two_status = leadtwodatad.status;
+        s->scene.lead_two_d_rel = leadtwodatad.dRel;
+        s->scene.lead_two_y_rel = leadtwodatad.yRel;
+        s->scene.lead_two_v_rel = leadtwodatad.vRel;
       } else if (eventd.which == cereal_Event_liveCalibration) {
         s->scene.world_objects_visible = true;
         struct cereal_LiveCalibrationData datad;
@@ -1493,6 +1742,16 @@ static void ui_update(UIState *s) {
       } else if (eventd.which == cereal_Event_model) {
         s->scene.model_ts = eventd.logMonoTime;
         s->scene.model = read_model(eventd.model);
+      } else if (eventd.which == cereal_Event_can) {
+        CanMessage can_message = {0};
+        struct cereal_CanData first_key;
+        cereal_get_CanData(&first_key, eventd.can, 0);
+        int can_size = capn_len(eventd.can);
+        char* can_data[can_size];
+        can_message.address = first_key.address;
+        
+        // TODO: Combine data of entire message and display it inline in some way.
+        add_can_message(s, can_message);
       } else if (eventd.which == cereal_Event_liveMpc) {
         struct cereal_LiveMpcData datad;
         cereal_read_LiveMpcData(&datad, eventd.liveMpc);
@@ -1513,7 +1772,6 @@ static void ui_update(UIState *s) {
       } else if (eventd.which == cereal_Event_thermal) {
         struct cereal_ThermalData datad;
         cereal_read_ThermalData(&datad, eventd.thermal);
-
         if (!datad.started) {
           update_status(s, STATUS_STOPPED);
         } else if (s->status == STATUS_STOPPED) {
@@ -1522,6 +1780,29 @@ static void ui_update(UIState *s) {
         }
 
         s->scene.started_ts = datad.startedTs;
+        if (datad.startedTs > 0) {
+          if (s->scene.engaged && s->scene.engaged_ts == 0) {
+            s->scene.engaged_ts = current_time;
+          }
+
+          if (!s->scene.engaged && s->scene.engaged_ts > 0) {
+            uint64_t engaged_ts = s->scene.engaged_ts;
+            int new_engaged_seconds = difftime(current_time,engaged_ts);
+            int existing_engaged_seconds = s->scene.engaged_total_seconds;
+            s->scene.engaged_total_seconds = existing_engaged_seconds + new_engaged_seconds;
+            s->scene.engaged_seconds = 0;
+            s->scene.engaged_ts = 0;
+          } else if (s->scene.engaged && s->scene.engaged_ts > 0) {
+            uint64_t engaged_ts = s->scene.engaged_ts;
+            int new_engaged_seconds = difftime(current_time,engaged_ts);
+            s->scene.engaged_seconds = new_engaged_seconds;
+          }
+        } else {
+          // If car is not started, engaged seconds can be reset.
+          s->scene.engaged_ts = 0;
+          s->scene.engaged_seconds = 0;
+        }
+
       } else if (eventd.which == cereal_Event_uiLayoutState) {
           struct cereal_UiLayoutState datad;
           cereal_read_UiLayoutState(&datad, eventd.uiLayoutState);
@@ -1769,9 +2050,17 @@ int main() {
     // awake on any touch
     int touch_x = -1, touch_y = -1;
     int touched = touch_poll(&touch, &touch_x, &touch_y, s->awake ? 0 : 100);
+    
     if (touched == 1) {
       // touch event will still happen :(
       set_awake(s, true);
+    }
+    
+    // Toggle Debug Console
+    // s->scene.debug_console_active=true;
+
+    if (touched == 1 && s->awake && is_touch_in_debug_console_bounds(touch)) {
+      toggle_debug_console(s);
     }
 
     // manage wakefulness
