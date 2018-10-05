@@ -106,7 +106,6 @@ const mat3 intrinsic_matrix = (mat3){{
   0.,   0.,   1.
 }};
 
-
 typedef struct UIScene {
   int frontview;
   int fullview;
@@ -1751,7 +1750,7 @@ static void ui_update(UIState *s) {
         char* can_data[can_size];
         can_message.address = first_key.address;
         
-        // TODO: Combine data of entire message and add it to a struct somehow.
+        // TODO: Combine data of entire message and display it inline in some way.
         add_can_message(s, can_message);
       } else if (eventd.which == cereal_Event_liveMpc) {
         struct cereal_LiveMpcData datad;
@@ -2058,7 +2057,7 @@ int main() {
     }
     
     // Toggle Debug Console
-    // s->scene.debug_console_active=true;
+    s->scene.debug_console_active=true;
 
     if (touched == 1 && s->awake && is_touch_in_debug_console_bounds(touch)) {
       toggle_debug_console(s);
