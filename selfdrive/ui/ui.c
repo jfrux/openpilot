@@ -1050,8 +1050,8 @@ static void ui_draw_vision_face(UIState *s) {
   nvgFillPaint(s->vg, face_img);
   nvgFill(s->vg);
 }
-char* seconds_to_time_str(int seconds) {
-  char time_output[11];
+
+static void seconds_to_time_str(char *seconds_str, int seconds) {
   int time = seconds;
   int hour = 0;
   int min = 0;
@@ -1062,13 +1062,12 @@ char* seconds_to_time_str(int seconds) {
 	min = time/60;
 	time = time%60;
 	sec = time;
-  // time_output = sprintf("seconds: %u", seconds);
-  snprintf ( time_output, 11, "%.2d:%.2d:%.2d", hour, min, sec );
-  return time_output;
+  snprintf(seconds_str, 9, "%.2d:%.2d:%.2d", hour, min, sec );
 }
 
 static void ui_draw_vision_engaged_timer(UIState *s, char* label, int seconds, int placement) {
   const UIScene *scene = &s->scene;
+  char seconds_str[9];
   const int box_separation = debug_console_padding;
   const int box_height = debug_timers_total_height/2;
   const int box_width = debug_console_w-(debug_console_padding*2);
@@ -1081,6 +1080,8 @@ static void ui_draw_vision_engaged_timer(UIState *s, char* label, int seconds, i
   const int timer_text_size = 32*2.5;
   const int timer_x = pos_x+box_width/2;
   const int timer_y = (pos_y+box_height/2)+40;
+  
+  seconds_to_time_str(seconds_str, seconds);
 
   nvgBeginPath(s->vg);
   nvgRoundedRect(s->vg, pos_x, pos_y, box_width, box_height, 10);
@@ -1099,7 +1100,7 @@ static void ui_draw_vision_engaged_timer(UIState *s, char* label, int seconds, i
   nvgFontFace(s->vg, "sans-bold");
   nvgFontSize(s->vg, timer_text_size);
   nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 255));
-  nvgText(s->vg, timer_x, timer_y, seconds_to_time_str(seconds), NULL);
+  nvgText(s->vg, timer_x, timer_y, seconds_str, NULL);
 }
 
 // Draws Seconds Engaged for Debug Console
@@ -1114,7 +1115,7 @@ static void ui_draw_vision_engaged_timers(UIState *s) {
 
 static void ui_draw_vision_can_message(UIState *s, CanMessage message, int placement) {
   const UIScene *scene = &s->scene;
-  char address_str[50];
+  char address_str[6];
   sprintf(address_str, "%g", message.address);
   const int box_separation = debug_console_padding;
   const int box_height = 60;
@@ -2072,9 +2073,6 @@ int main() {
       set_awake(s, true);
     }
     
-    // TODO: If we add more touch regions in the future, it would be best to move
-    // them into a struct and change it to is_touch_in_bounds(touch, region)
-
     // Toggle Debug Console
     // s->scene.debug_console_active=true;
 
