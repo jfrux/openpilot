@@ -1199,10 +1199,10 @@ static void ui_draw_vision_debug_console(UIState *s) {
                           gradient_ex,
                           gradient_ey,
                           nvgRGBAf(0,0,0,0),
-                          nvgRGBAf(0,0,0,0.65)
+                          nvgRGBAf(0,0,0,0.30)
                         );
     nvgFillPaint(s->vg, debug_gradient);
-    nvgRect(s->vg, gradient_sx, gradient_sy, debug_console_w+100, box_h);
+    nvgRect(s->vg, debug_console_x, debug_console_y, debug_console_w, debug_console_h);
     nvgFill(s->vg);
     
     nvgBeginPath(s->vg);
@@ -2075,7 +2075,7 @@ int main() {
     }
     
     // Toggle Debug Console
-    // s->scene.debug_console_active=true;
+    s->scene.debug_console_active=true;
 
     if (touched == 1 && s->awake && is_touch_in_debug_console_bounds(touch)) {
       toggle_debug_console(s);
