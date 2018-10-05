@@ -31,10 +31,13 @@
 #include "common/framebuffer.h"
 #include "common/visionipc.h"
 #include "common/visionimg.h"
+#include "common/candata.h"
 #include "common/modeldata.h"
 #include "common/params.h"
 
 #include "cereal/gen/c/log.capnp.h"
+
+#define CAN_BUFFER_SIZE 5
 
 #define STATUS_STOPPED 0
 #define STATUS_DISENGAGED 1
@@ -200,6 +203,9 @@ typedef struct UIState {
 
   int plus_state;
 
+  CanMessage can_messages[CAN_BUFFER_SIZE];
+  int can_head_index;
+  
   // vision state
   bool vision_connected;
   bool vision_connect_firstrun;
@@ -253,6 +259,12 @@ static void set_brightness(UIState *s, int brightness) {
       last_brightness = brightness;
     }
   }
+}
+
+static void add_can_message(UIState *s, CanMessage new_message) {
+  CanMessage head = s->can_messages[s->can_head_index];
+  s->can_messages[s->can_head_index] = new_message;
+  s->can_head_index = (s->can_head_index + 1) % CAN_BUFFER_SIZE; 
 }
 
 static void set_awake(UIState *s, bool awake) {
@@ -1089,6 +1101,42 @@ static void ui_draw_engaged_timer(UIState *s, char* label, int seconds, int plac
   nvgText(s->vg, timer_x, timer_y, seconds_to_time_str(seconds), NULL);
 }
 
+
+// static void ui_draw_can_message(UIState *s, char* label, int seconds, int placement) {
+//   const UIScene *scene = &s->scene;
+//   const int box_separation = debug_console_padding;
+//   const int box_height = 150;
+//   const int box_width = debug_console_w-(debug_console_padding*2);
+//   const int pos_x = debug_console_x+((debug_console_w/2)-(box_width/2));
+//   const int pos_y = debug_console_y+(debug_console_padding+(box_height+box_separation)*placement);
+//   const int label_text_size = 20*2.5;
+//   const int label_x = pos_x+box_width/2;
+//   const int label_y = (pos_y+box_height/2)-20;
+
+//   const int timer_text_size = 32*2.5;
+//   const int timer_x = pos_x+box_width/2;
+//   const int timer_y = (pos_y+box_height/2)+50;
+
+//   nvgBeginPath(s->vg);
+//   nvgRoundedRect(s->vg, pos_x, pos_y, box_width, box_height, 10);
+//   nvgStrokeColor(s->vg, nvgRGBA(255,255,255,80));
+//   nvgStrokeWidth(s->vg, 1);
+//   nvgStroke(s->vg);
+//   nvgTextAlign(s->vg, NVG_ALIGN_CENTER | NVG_ALIGN_BASELINE);
+
+//   // Label
+//   nvgFontFace(s->vg, "sans-regular");
+//   nvgFontSize(s->vg, label_text_size);
+//   nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
+//   nvgText(s->vg, label_x, label_y, label, NULL);
+  
+//   // Time
+//   nvgFontFace(s->vg, "sans-bold");
+//   nvgFontSize(s->vg, timer_text_size);
+//   nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 255));
+//   nvgText(s->vg, timer_x, timer_y, seconds_to_time_str(seconds), NULL);
+// }
+
 // Draws Seconds Engaged for Debug Console
 static void ui_draw_vision_engaged_timers(UIState *s) {
   const UIScene *scene = &s->scene;
@@ -1295,6 +1343,20 @@ static PathData read_path(cereal_ModelData_PathData_ptr pathp) {
   return ret;
 }
 
+static CanData read_can(cereal_CanData_ptr canp) {
+  struct cereal_CanData cand;
+  cereal_read_CanData(&cand, canp);
+
+  CanData d = {0};
+
+  d.address = cand.address;
+  d.src = cand.src;
+  d.busTime = cand.busTime;
+  // d.data = cand.data;
+
+  return d;
+}
+
 static ModelData read_model(cereal_ModelData_ptr modelp) {
   struct cereal_ModelData modeld;
   cereal_read_ModelData(&modeld, modelp);
@@ -1437,6 +1499,28 @@ static void ui_update(UIState *s) {
 
     uint64_t current_time = time(NULL);
 
+    if (polls[7].revents) {
+      // can socket
+      // printf("\n\n\nCAN START\n");
+      zmq_msg_t msg;
+      err = zmq_msg_init(&msg);
+      assert(err == 0);
+      err = zmq_msg_recv(&msg, s->can_sock_raw, 0);
+      assert(err >= 0);
+
+      struct capn ctx;
+      capn_init_mem(&ctx, zmq_msg_data(&msg), zmq_msg_size(&msg), 0);
+
+      cereal_CanData_ptr canp;
+      canp.p = capn_getp(capn_root(&ctx), 0, 1);
+      struct cereal_CanData cand;
+      cereal_read_CanData(&cand, canp);
+      // printf("CanAddress: %u\n\n",cand.address);
+      // printf("CanBusTime: %u\n",cand.busTime);
+      // printf("CanSrc: %u\n",cand.src);
+      // printf("CanDat: %u\n",cand.dat);
+      add_can_message(s, read_can(canp));
+    }
     if (s->vision_connected && polls[9].revents) {
       // vision ipc event
       VisionPacket rp;
@@ -1475,7 +1559,6 @@ static void ui_update(UIState *s) {
         } else {
           assert(idx < UI_BUF_COUNT);
           s->cur_vision_idx = idx;
-          // printf("v %d\n", ((uint8_t*)s->bufs[idx].addr)[0]);
         }
       } else {
         assert(false);
@@ -1536,10 +1619,9 @@ static void ui_update(UIState *s) {
         s->scene.engageable = datad.engageable;
         s->scene.gps_planner_active = datad.gpsPlannerActive;
         s->scene.monitoring_active = datad.driverMonitoringOn;
-        // printf("recv %f\n", datad.vEgo);
 
         s->scene.frontview = datad.rearViewCam;
-        
+
         if (datad.alertText1.str) {
           snprintf(s->scene.alert_text1, sizeof(s->scene.alert_text1), "%s", datad.alertText1.str);
         } else {
@@ -1629,6 +1711,38 @@ static void ui_update(UIState *s) {
       } else if (eventd.which == cereal_Event_model) {
         s->scene.model_ts = eventd.logMonoTime;
         s->scene.model = read_model(eventd.model);
+      } else if (eventd.which == cereal_Event_can) {
+        CanMessage can_message = {0};
+        struct cereal_CanData first_key;
+        cereal_get_CanData(&first_key, eventd.can, 0);
+        int can_size = capn_len(eventd.can);
+        char* can_data[can_size];
+        can_message.address = first_key.address;
+        
+        // TODO: Combine data of entire message and add it to a struct somehow.
+        // can_data[0] = first_key.dat;
+        // snprintf ( dd, 11, "%5.2f\n", sec_since_boot() - start) );
+        // printf("%u\n",eventd.logMonoTime);
+        
+        // Start at the 2nd message
+        // for (int i = 1; i < can_size; i++) {
+        //   struct cereal_CanData datad;
+          // cereal_get_CanData(&datad, eventd.can, i);
+          // can_data[i] = capn_get_data(datad.dat,0);
+        // }
+        // printf("can_data: %s",can_data);
+        // printf("capn_len(eventd.can):%u\n",);
+        // for(unsigned int i = 0; i < eventd.can.size(); i ++)  {
+        //   printf("in loop");
+        // }
+        // printf("cereal_Event_can called!\n");
+        // eventd.can[0]
+        // capn_list32 can_data_list = ;
+        // capn_resolve(&can_data_list.p);
+
+        // for (int i = 0; i < 50; i++){
+        //   s->scene.mpc_x[i] = capn_to_f32(capn_get32(x_list, i));
+        // }
       } else if (eventd.which == cereal_Event_liveMpc) {
         struct cereal_LiveMpcData datad;
         cereal_read_LiveMpcData(&datad, eventd.liveMpc);
@@ -1657,21 +1771,22 @@ static void ui_update(UIState *s) {
         }
 
         s->scene.started_ts = datad.startedTs;
-        
         if (datad.startedTs > 0) {
-          if (s->scene.engaged_ts > 0) {
-            // Not sure if this will ever be possible.
-            if (s->scene.started_ts < s->scene.engaged_ts) {
-              s->scene.engaged_ts = 0;
-            }
-            uint64_t engaged_time = s->scene.engaged_ts;
-            uint64_t engaged_time_diff = difftime(current_time,engaged_time);
-            s->scene.engaged_seconds = engaged_time_diff;
-          } else {
-            // Resets the engaged time to current time and resets engaged seconds to 0
+          if (s->scene.engaged && s->scene.engaged_ts == 0) {
             s->scene.engaged_ts = current_time;
-            s->scene.engaged_seconds = 0;
-            s->scene.engaged_total_seconds = s->scene.engaged_total_seconds+s->scene.engaged_seconds;
+          }
+
+          if (!s->scene.engaged && s->scene.engaged_ts > 0) {
+            uint64_t engaged_ts = s->scene.engaged_ts;
+            int new_engaged_seconds = difftime(current_time,engaged_ts);
+            int existing_engaged_seconds = s->scene.engaged_total_seconds;
+            s->scene.engaged_seconds = new_engaged_seconds;
+            s->scene.engaged_total_seconds = existing_engaged_seconds + new_engaged_seconds;
+            s->scene.engaged_ts = 0;
+          } else if (s->scene.engaged && s->scene.engaged_ts > 0) {
+            uint64_t engaged_ts = s->scene.engaged_ts;
+            int new_engaged_seconds = difftime(current_time,engaged_ts);
+            s->scene.engaged_seconds = new_engaged_seconds;
           }
         } else {
           // If car is not started, engaged seconds can be reset.
@@ -1925,9 +2040,10 @@ int main() {
     // awake on any touch
     int touch_x = -1, touch_y = -1;
     int touched = touch_poll(&touch, &touch_x, &touch_y, s->awake ? 0 : 100);
-    set_awake(s, true);
+    
     if (touched == 1) {
       // touch event will still happen :(
+      set_awake(s, true);
     }
     
     // TODO: If we add more touch regions in the future, it would be best to move
