@@ -73,6 +73,7 @@ const int debug_console_y = box_y+box_h-debug_console_h-bdr_s;
 const int debug_console_y2 = debug_console_y+debug_console_w;
 const int header_h = 420;
 const int footer_h = 280;
+const int debug_timers_total_height = 270;
 const int footer_y = vwp_h-bdr_s-footer_h;
 
 const uint8_t bg_colors[][4] = {
@@ -1066,20 +1067,20 @@ char* seconds_to_time_str(int seconds) {
   return time_output;
 }
 
-static void ui_draw_engaged_timer(UIState *s, char* label, int seconds, int placement) {
+static void ui_draw_vision_engaged_timer(UIState *s, char* label, int seconds, int placement) {
   const UIScene *scene = &s->scene;
   const int box_separation = debug_console_padding;
-  const int box_height = 150;
+  const int box_height = debug_timers_total_height/2;
   const int box_width = debug_console_w-(debug_console_padding*2);
   const int pos_x = debug_console_x+((debug_console_w/2)-(box_width/2));
   const int pos_y = debug_console_y+(debug_console_padding+(box_height+box_separation)*placement);
   const int label_text_size = 20*2.5;
   const int label_x = pos_x+box_width/2;
-  const int label_y = (pos_y+box_height/2)-20;
+  const int label_y = (pos_y+box_height/2)-30;
 
   const int timer_text_size = 32*2.5;
   const int timer_x = pos_x+box_width/2;
-  const int timer_y = (pos_y+box_height/2)+50;
+  const int timer_y = (pos_y+box_height/2)+40;
 
   nvgBeginPath(s->vg);
   nvgRoundedRect(s->vg, pos_x, pos_y, box_width, box_height, 10);
@@ -1101,64 +1102,116 @@ static void ui_draw_engaged_timer(UIState *s, char* label, int seconds, int plac
   nvgText(s->vg, timer_x, timer_y, seconds_to_time_str(seconds), NULL);
 }
 
-
-// static void ui_draw_can_message(UIState *s, char* label, int seconds, int placement) {
-//   const UIScene *scene = &s->scene;
-//   const int box_separation = debug_console_padding;
-//   const int box_height = 150;
-//   const int box_width = debug_console_w-(debug_console_padding*2);
-//   const int pos_x = debug_console_x+((debug_console_w/2)-(box_width/2));
-//   const int pos_y = debug_console_y+(debug_console_padding+(box_height+box_separation)*placement);
-//   const int label_text_size = 20*2.5;
-//   const int label_x = pos_x+box_width/2;
-//   const int label_y = (pos_y+box_height/2)-20;
-
-//   const int timer_text_size = 32*2.5;
-//   const int timer_x = pos_x+box_width/2;
-//   const int timer_y = (pos_y+box_height/2)+50;
-
-//   nvgBeginPath(s->vg);
-//   nvgRoundedRect(s->vg, pos_x, pos_y, box_width, box_height, 10);
-//   nvgStrokeColor(s->vg, nvgRGBA(255,255,255,80));
-//   nvgStrokeWidth(s->vg, 1);
-//   nvgStroke(s->vg);
-//   nvgTextAlign(s->vg, NVG_ALIGN_CENTER | NVG_ALIGN_BASELINE);
-
-//   // Label
-//   nvgFontFace(s->vg, "sans-regular");
-//   nvgFontSize(s->vg, label_text_size);
-//   nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
-//   nvgText(s->vg, label_x, label_y, label, NULL);
-  
-//   // Time
-//   nvgFontFace(s->vg, "sans-bold");
-//   nvgFontSize(s->vg, timer_text_size);
-//   nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 255));
-//   nvgText(s->vg, timer_x, timer_y, seconds_to_time_str(seconds), NULL);
-// }
-
 // Draws Seconds Engaged for Debug Console
 static void ui_draw_vision_engaged_timers(UIState *s) {
   const UIScene *scene = &s->scene;
   int engaged_seconds = s->scene.engaged_seconds;
   int engaged_total_seconds = s->scene.engaged_total_seconds;
 
-  ui_draw_engaged_timer(s, "current engage", engaged_seconds, 0);
-  ui_draw_engaged_timer(s, "totals for drive", engaged_total_seconds, 1);
+  ui_draw_vision_engaged_timer(s, "current engage", engaged_seconds, 0);
+  ui_draw_vision_engaged_timer(s, "totals for drive", engaged_total_seconds+engaged_seconds, 1);
+}
+
+static void ui_draw_vision_can_message(UIState *s, CanMessage message, int placement) {
+  const UIScene *scene = &s->scene;
+  char address_str[50];
+  sprintf(address_str, "%g", message.address);
+  const int box_separation = debug_console_padding;
+  const int box_height = 60;
+  const int box_width = debug_console_w-(debug_console_padding*2);
+  const int pos_x = debug_console_x+((debug_console_w/2)-(box_width/2));
+  const int pos_y = debug_console_y+75+debug_timers_total_height+(debug_console_padding+(box_height+box_separation)*placement);
+  
+  // CANBUS NUMBER?
+  // const int src_text_size = 20*2.5;
+  // const int src_x = pos_x+box_width/2;
+  // const int src_y = (pos_y+box_height/2)-50;
+  
+  // DATA
+  // const int data_text_size = 20*2.5;
+  // const int data_x = pos_x+box_width/2;
+  // const int data_y = (pos_y+box_height/2)-20;
+
+  const int address_text_size = 22*2.5;
+  const int address_x = pos_x+box_width/2;
+  const int address_y = (pos_y+box_height/2)+15;
+
+  nvgBeginPath(s->vg);
+  nvgRoundedRect(s->vg, pos_x, pos_y, box_width, box_height, 10);
+  nvgStrokeColor(s->vg, nvgRGBA(255,255,255,80));
+  nvgStrokeWidth(s->vg, 1);
+  nvgStroke(s->vg);
+  nvgTextAlign(s->vg, NVG_ALIGN_CENTER | NVG_ALIGN_BASELINE);
+
+  // data
+  // nvgFontFace(s->vg, "sans-regular");
+  // nvgFontSize(s->vg, label_text_size);
+  // nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
+  // nvgText(s->vg, label_x, label_y, label, NULL);
+  
+  // can_message.address
+  nvgFontFace(s->vg, "sans-bold");
+  nvgFontSize(s->vg, address_text_size);
+  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 255));
+  nvgText(s->vg, address_x, address_y, address_str, NULL);
+}
+
+static void ui_draw_vision_can_messages(UIState *s) {
+  const UIScene *scene = &s->scene;
+  int engaged_seconds = s->scene.engaged_seconds;
+  int engaged_total_seconds = s->scene.engaged_total_seconds;
+  const int box_separation = debug_console_padding;
+  const int box_height = 60;
+  const int box_width = debug_console_w-(debug_console_padding*2);
+  const int pos_x = debug_console_x+((debug_console_w/2)-(box_width/2));
+  const int pos_y = debug_console_y+debug_timers_total_height+(debug_console_padding+(box_height+box_separation));
+  const int label_text_size = 20*2.5;
+  const int label_x = pos_x+box_width/2;
+  const int label_y = (pos_y+box_height/2)-40;
+  
+  nvgBeginPath(s->vg);
+  nvgFontFace(s->vg, "sans-regular");
+  nvgFontSize(s->vg, label_text_size);
+  nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 200));
+  nvgText(s->vg, label_x, label_y, "last 5 canbus", NULL);
+  
+  for (int i = 0; i < CAN_BUFFER_SIZE; i++) {
+    ui_draw_vision_can_message(s, s->can_messages[i], i);
+  }
 }
 
 // Draws Debug Console Box
 static void ui_draw_vision_debug_console(UIState *s) {
   const UIScene *scene = &s->scene;
-  
+  int ui_viz_rx = scene->ui_viz_rx;
+  int ui_viz_rw = scene->ui_viz_rw;
   if (s->scene.debug_console_active) {
+    nvgBeginPath(s->vg);
+    int gradient_sx = debug_console_x;// Starting X
+    int gradient_sy = debug_console_y;// Starting Y
+    int gradient_ex = debug_console_x;// Ending X
+    int gradient_ey = debug_console_y+debug_console_h;// Ending Y
+  
+    NVGpaint debug_gradient = nvgLinearGradient(s->vg, 
+                          gradient_sx,
+                          gradient_sy,
+                          gradient_ex,
+                          gradient_ey,
+                          nvgRGBAf(0,0,0,0),
+                          nvgRGBAf(0,0,0,0.65)
+                        );
+    nvgFillPaint(s->vg, debug_gradient);
+    nvgRect(s->vg, gradient_sx, gradient_sy, debug_console_w+100, box_h);
+    nvgFill(s->vg);
+    
     nvgBeginPath(s->vg);
     nvgRoundedRect(s->vg, debug_console_x, debug_console_y, debug_console_w, debug_console_h, 20);
     nvgStrokeColor(s->vg, nvgRGBA(255,255,255,150));
     nvgStrokeWidth(s->vg, 2.5);
     nvgStroke(s->vg);
-
+    
     ui_draw_vision_engaged_timers(s);
+    ui_draw_vision_can_messages(s);
   }
 }
 
@@ -1515,11 +1568,6 @@ static void ui_update(UIState *s) {
       canp.p = capn_getp(capn_root(&ctx), 0, 1);
       struct cereal_CanData cand;
       cereal_read_CanData(&cand, canp);
-      // printf("CanAddress: %u\n\n",cand.address);
-      // printf("CanBusTime: %u\n",cand.busTime);
-      // printf("CanSrc: %u\n",cand.src);
-      // printf("CanDat: %u\n",cand.dat);
-      add_can_message(s, read_can(canp));
     }
     if (s->vision_connected && polls[9].revents) {
       // vision ipc event
@@ -1720,29 +1768,7 @@ static void ui_update(UIState *s) {
         can_message.address = first_key.address;
         
         // TODO: Combine data of entire message and add it to a struct somehow.
-        // can_data[0] = first_key.dat;
-        // snprintf ( dd, 11, "%5.2f\n", sec_since_boot() - start) );
-        // printf("%u\n",eventd.logMonoTime);
-        
-        // Start at the 2nd message
-        // for (int i = 1; i < can_size; i++) {
-        //   struct cereal_CanData datad;
-          // cereal_get_CanData(&datad, eventd.can, i);
-          // can_data[i] = capn_get_data(datad.dat,0);
-        // }
-        // printf("can_data: %s",can_data);
-        // printf("capn_len(eventd.can):%u\n",);
-        // for(unsigned int i = 0; i < eventd.can.size(); i ++)  {
-        //   printf("in loop");
-        // }
-        // printf("cereal_Event_can called!\n");
-        // eventd.can[0]
-        // capn_list32 can_data_list = ;
-        // capn_resolve(&can_data_list.p);
-
-        // for (int i = 0; i < 50; i++){
-        //   s->scene.mpc_x[i] = capn_to_f32(capn_get32(x_list, i));
-        // }
+        add_can_message(s, can_message);
       } else if (eventd.which == cereal_Event_liveMpc) {
         struct cereal_LiveMpcData datad;
         cereal_read_LiveMpcData(&datad, eventd.liveMpc);
@@ -1780,9 +1806,8 @@ static void ui_update(UIState *s) {
             uint64_t engaged_ts = s->scene.engaged_ts;
             int new_engaged_seconds = difftime(current_time,engaged_ts);
             int existing_engaged_seconds = s->scene.engaged_total_seconds;
-            s->scene.engaged_seconds = new_engaged_seconds;
             s->scene.engaged_total_seconds = existing_engaged_seconds + new_engaged_seconds;
-            s->scene.engaged_ts = 0;
+            s->scene.engaged_seconds = 0;
           } else if (s->scene.engaged && s->scene.engaged_ts > 0) {
             uint64_t engaged_ts = s->scene.engaged_ts;
             int new_engaged_seconds = difftime(current_time,engaged_ts);
@@ -1790,6 +1815,7 @@ static void ui_update(UIState *s) {
           }
         } else {
           // If car is not started, engaged seconds can be reset.
+          s->scene.engaged_ts = 0;
           s->scene.engaged_seconds = 0;
         }
 
@@ -2050,7 +2076,7 @@ int main() {
     // them into a struct and change it to is_touch_in_bounds(touch, region)
 
     // Toggle Debug Console
-    s->scene.debug_console_active=true;
+    // s->scene.debug_console_active=true;
 
     if (touched == 1 && s->awake && is_touch_in_debug_console_bounds(touch)) {
       toggle_debug_console(s);
