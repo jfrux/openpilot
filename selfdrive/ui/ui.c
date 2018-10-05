@@ -1553,23 +1553,6 @@ static void ui_update(UIState *s) {
 
     uint64_t current_time = time(NULL);
 
-    if (polls[7].revents) {
-      // can socket
-      // printf("\n\n\nCAN START\n");
-      zmq_msg_t msg;
-      err = zmq_msg_init(&msg);
-      assert(err == 0);
-      err = zmq_msg_recv(&msg, s->can_sock_raw, 0);
-      assert(err >= 0);
-
-      struct capn ctx;
-      capn_init_mem(&ctx, zmq_msg_data(&msg), zmq_msg_size(&msg), 0);
-
-      cereal_CanData_ptr canp;
-      canp.p = capn_getp(capn_root(&ctx), 0, 1);
-      struct cereal_CanData cand;
-      cereal_read_CanData(&cand, canp);
-    }
     if (s->vision_connected && polls[9].revents) {
       // vision ipc event
       VisionPacket rp;
