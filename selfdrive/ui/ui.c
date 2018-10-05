@@ -2075,7 +2075,7 @@ int main() {
     }
     
     // Toggle Debug Console
-    s->scene.debug_console_active=true;
+    // s->scene.debug_console_active=true;
 
     if (touched == 1 && s->awake && is_touch_in_debug_console_bounds(touch)) {
       toggle_debug_console(s);
